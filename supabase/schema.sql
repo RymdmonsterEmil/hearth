@@ -37,7 +37,9 @@ create table if not exists public.items (
   updated_at   timestamptz not null default now(),
   completed_at timestamptz,
   last_done_by uuid references auth.users on delete set null,
-  reminded_at  timestamptz          -- set by the reminder job so each due date only notifies once
+  reminded_at  timestamptz,         -- set by the reminder job so each due date only notifies once
+  category     text check (char_length(category) <= 40),   -- e.g. "Bathroom"
+  store        text check (char_length(store) <= 60)       -- where to buy it, e.g. "Clas Ohlson"
 );
 create index if not exists items_household_idx on public.items (household_id);
 create index if not exists items_due_idx on public.items (due_at) where not done;

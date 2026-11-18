@@ -4,6 +4,8 @@ Shared household lists for two iPhones. It's free, and you install it from Safar
 
 - **To Fix**: dump anything that needs fixing. Mark it urgent, assign it, give it a due date.
 - **Routines**: repeating chores. Ticking one off schedules the next one.
+- **Categories**: give tasks a category (Bathroom, Garden…) and filter each list by it.
+- **Buy at**: set a store on anything that needs buying. The **Shopping** tab groups everything by store, including tasks from To Fix, so at Clas Ohlson you tap its chip and see just what to get there. Ticking a task off there marks it done everywhere.
 - **Shopping**: tick things off into "In the basket", then clear them.
 - **Pings**: push notifications to your partner (quick messages, or about a specific item). Assigning something to your partner pings them automatically. Adding items can too, batched into one ping.
 - **Reminders**: a push notification when something with a due date becomes due.
@@ -104,4 +106,5 @@ Once you've both created accounts, open Supabase → **Authentication → Sign I
 | `supabase/schema.sql` | Database tables and security rules. |
 | `supabase/functions/notify/index.ts` | Sends push notifications for pings and reminders. |
 | `supabase/reminders.sql` | Runs the reminder check every 5 minutes. |
+| `supabase/update-categories-stores.sql` | One-time update that adds categories and stores to an existing database. New setups don't need it (it's in `schema.sql`). |
 | `.secrets/vapid.env` | Private notification key. **Never upload this.** |

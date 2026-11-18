@@ -5,7 +5,7 @@ const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+
 
 const ITEM_COLUMNS = [
   "id", "household_id", "kind", "title", "notes", "done", "urgent", "due_at", "repeat",
-  "assignee", "created_by", "created_at", "completed_at", "last_done_by",
+  "assignee", "created_by", "created_at", "completed_at", "last_done_by", "category", "store",
 ];
 
 const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => k in obj).map((k) => [k, obj[k]]));

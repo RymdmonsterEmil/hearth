@@ -1,6 +1,6 @@
 // Hearth service worker: makes the app open offline and shows push notifications.
 
-const CACHE = "hearth-v1";
+const CACHE = "hearth-v2";
 const SHELL = [
   "./",
   "index.html",
@@ -33,7 +33,7 @@ self.addEventListener("fetch", (event) => {
   if (url.origin === self.location.origin) {
     // App files: always try for the newest version, fall back to the saved copy offline.
     event.respondWith(
-      fetch(request)
+      fetch(request, { cache: "no-cache" }) // check with the server so updates show up straight away
         .then((response) => {
           if (response.ok) {
             const copy = response.clone();

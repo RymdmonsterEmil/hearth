@@ -59,7 +59,11 @@ const ICON_PATHS = {
   chevron: '<path d="M9 6l6 6-6 6"/>',
   filter: '<path d="M4 6h16M7 12h10M10 18h4"/>',
   share: '<path d="M12 3v13M7 8l5-5 5 5"/><path d="M5 12v8h14v-8"/>',
+  tag: '<path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="7.5" cy="7.5" r="1.2"/>',
+  store: '<path d="M4 9l1.5-5h13L20 9"/><path d="M4 9a2.7 2.7 0 0 0 5.3 0 2.7 2.7 0 0 0 5.4 0 2.7 2.7 0 0 0 5.3 0"/><path d="M5 11v10h14V11M10 21v-5h4v5"/>',
 };
+
+const DEFAULT_CATEGORIES = ["Kitchen", "Bathroom", "Bedroom", "Living room", "Garden", "Garage", "Car"];
 
 const icon = (name, cls = "icon") =>
   `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
@@ -75,6 +79,8 @@ const state = {
   tab: ["fix", "routine", "shopping", "home"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "fix",
   mineOnly: false,
   showDone: {},
+  category: {},      // chosen category filter per list (fix, routine)
+  storeFilter: null, // chosen store on the Shopping tab
   live: "connecting",
   push: "unknown",
 };
@@ -199,12 +205,54 @@ const memberName = (id) => {
 const partner = () => state.members.find((m) => m.user_id !== me());
 const partnerName = () => partner()?.name ?? "your partner";
 
-function openCount(kind) {
-  return state.items.filter((i) => i.kind === kind && !i.done && (kind !== "routine" || isOverdue(i))).length;
+const norm = (s) => (s ?? "").trim().toLocaleLowerCase();
+const clean = (s) => (s ?? "").trim().replace(/\s+/g, " ");
+
+/** Distinct values of a text field (e.g. category, store), keeping the first spelling seen. */
+function distinct(field, items = state.items) {
+  const seen = new Map();
+  for (const i of items) {
+    const v = clean(i[field]);
+    if (v && !seen.has(norm(v))) seen.set(norm(v), v);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
-function visibleItems(kind) {
-  return state.items.filter((i) => i.kind === kind && (!state.mineOnly || !i.assignee || i.assignee === me()));
+/** Everything that needs buying: shopping items, plus tasks with a "Buy at" store
+ *  (routines only once they're due within the next 3 days). */
+function onShoppingList(i) {
+  if (i.kind === "shopping") return true;
+  if (!clean(i.store) || i.done) return false;
+  if (i.kind === "routine") return !!i.due_at && new Date(i.due_at) <= Date.now() + 3 * 86400000;
+  return true;
+}
+
+function openCount(tab) {
+  if (tab === "shopping") return state.items.filter((i) => !i.done && onShoppingList(i)).length;
+  return state.items.filter((i) => i.kind === tab && !i.done && (tab !== "routine" || isOverdue(i))).length;
+}
+
+function visibleItems(tab) {
+  const mine = (i) => !state.mineOnly || !i.assignee || i.assignee === me();
+  return state.items.filter((i) => (tab === "shopping" ? onShoppingList(i) : i.kind === tab) && mine(i));
+}
+
+/** The active filter for this tab, if it still matches something. */
+function activeFilter(tab, items) {
+  if (tab === "shopping") {
+    const options = distinct("store", items);
+    if (state.storeFilter && !options.some((o) => norm(o) === norm(state.storeFilter))) state.storeFilter = null;
+    return { field: "store", options, value: state.storeFilter };
+  }
+  const options = distinct("category", items);
+  if (state.category[tab] && !options.some((o) => norm(o) === norm(state.category[tab]))) state.category[tab] = null;
+  return { field: "category", options, value: state.category[tab] ?? null };
+}
+
+function setFilter(tab, value) {
+  if (tab === "shopping") state.storeFilter = value;
+  else state.category[tab] = value;
+  render();
 }
 
 function byDueThenNewest(a, b) {
@@ -225,8 +273,13 @@ function groupItems(kind, open) {
     add("Overdue", open.filter(isOverdue));
     add("This week", open.filter((i) => i.due_at && !isOverdue(i) && new Date(i.due_at) <= weekAhead));
     add("Later", open.filter((i) => !i.due_at || new Date(i.due_at) > weekAhead));
-  } else {
+  } else if (state.storeFilter) {
     add("To buy", open);
+  } else {
+    add("Anywhere", open.filter((i) => !clean(i.store)));
+    for (const storeName of distinct("store", open)) {
+      groups.push({ title: storeName, store: true, items: open.filter((i) => norm(i.store) === norm(storeName)).sort(byDueThenNewest) });
+    }
   }
   return groups;
 }
@@ -277,6 +330,8 @@ function addItem(title, kind) {
     created_at: new Date().toISOString(),
     completed_at: null,
     last_done_by: null,
+    category: kind === "shopping" ? null : state.category[kind] ?? null,
+    store: kind === "shopping" ? state.storeFilter : null,
   };
   if (kind === "routine") {
     item.repeat = "weekly";
@@ -294,6 +349,7 @@ function toggle(item) {
   } else {
     const done = !item.done;
     saveItem({ ...item, done, completed_at: done ? now : null, last_done_by: done ? me() : null });
+    if (done && state.tab === "shopping" && item.kind !== "shopping") toast(`Bought, and marked done on ${KINDS[item.kind].title}`);
   }
 }
 
@@ -603,7 +659,6 @@ function render() {
   shell.filterBtn.hidden = isHome;
   shell.filterBtn.textContent = state.mineOnly ? "Mine" : "Everyone's";
   shell.demo.hidden = !state.backend.demo;
-  if (!isHome) shell.quickInput.placeholder = KINDS[state.tab].prompt;
 
   for (const btn of shell.tabs) {
     const tab = btn.dataset.tab;
@@ -619,6 +674,7 @@ function render() {
   if (!(isHome && typingInContent)) {
     shell.content.replaceChildren(isHome ? renderHome() : renderList(state.tab));
   }
+  if (!isHome) shell.quickInput.placeholder = placeholderFor(state.tab);
 
   saveCache();
   updateAppBadge();
@@ -626,25 +682,52 @@ function render() {
 
 // ─── Rendering: lists ───────────────────────────────────────────────────────
 
+function placeholderFor(tab) {
+  const value = tab === "shopping" ? state.storeFilter : state.category[tab];
+  if (!value) return KINDS[tab].prompt;
+  return tab === "shopping" ? `Add to the ${value} list…` : `Add to ${value}…`;
+}
+
+function filterBar(tab, filter) {
+  if (!filter.options.length) return null;
+  const chip = (label, value) => h("button", {
+    class: `fchip${norm(value) === norm(filter.value) ? " on" : ""}`,
+    "aria-pressed": norm(value) === norm(filter.value) ? "true" : "false",
+    onclick: () => setFilter(tab, value),
+  }, value && tab === "shopping" ? h("span", { html: icon("store", "icon tiny") }) : null, label);
+  return h("div", { class: "filter-bar", role: "group", "aria-label": tab === "shopping" ? "Stores" : "Categories" },
+    chip(tab === "shopping" ? "All stores" : "All", null),
+    filter.options.map((o) => chip(o, o)));
+}
+
 function renderList(kind) {
   const items = visibleItems(kind);
-  const open = items.filter((i) => !i.done);
-  const done = items.filter((i) => i.done)
+  const filter = activeFilter(kind, items);
+  const matches = (i) => !filter.value || norm(i[filter.field]) === norm(filter.value);
+  const open = items.filter((i) => !i.done && matches(i));
+  const done = items.filter((i) => i.done && matches(i))
     .sort((a, b) => new Date(b.completed_at ?? 0) - new Date(a.completed_at ?? 0));
   const groups = groupItems(kind, open);
 
+  const frag = h("div", { class: "list" }, filterBar(kind, filter));
+
   if (!groups.length && !done.length) {
-    return h("div", { class: "empty" },
+    const title = filter.value
+      ? `Nothing left for ${filter.value}`
+      : state.mineOnly && items.length === 0 && state.items.some((i) => i.kind === kind) ? "Nothing for you here" : KINDS[kind].emptyTitle;
+    frag.append(h("div", { class: "empty" },
       h("div", { class: "empty-icon", html: icon(kind, "icon big") }),
-      h("h2", {}, state.mineOnly && state.items.some((i) => i.kind === kind) ? "Nothing for you here" : KINDS[kind].emptyTitle),
-      h("p", {}, KINDS[kind].emptyText));
+      h("h2", {}, title),
+      filter.value ? null : h("p", {}, KINDS[kind].emptyText)));
+    return frag;
   }
 
-  const frag = h("div", { class: "list" });
   for (const group of groups) {
     frag.append(h("section", { class: "group" },
-      h("h3", { class: group.title === "Urgent" || group.title === "Overdue" ? "danger" : "" }, group.title),
-      h("ul", { class: "card" }, group.items.map(itemRow))));
+      h("h3", { class: group.title === "Urgent" || group.title === "Overdue" ? "danger" : "" },
+        group.store ? h("span", { class: "h3-icon", html: icon("store", "icon tiny") }) : null,
+        group.title),
+      h("ul", { class: "card" }, group.items.map((i) => itemRow(i)))));
   }
 
   if (done.length) {
@@ -654,7 +737,7 @@ function renderList(kind) {
       ontoggle: (e) => { state.showDone[kind] = e.currentTarget.open; },
     },
     h("summary", {}, `${kind === "shopping" ? "In the basket" : "Done"} (${done.length})`),
-    h("ul", { class: "card" }, done.map(itemRow)),
+    h("ul", { class: "card" }, done.map((i) => itemRow(i))),
     h("button", {
       class: "text-btn danger",
       onclick: () => deleteItems(done.map((i) => i.id)),
@@ -689,6 +772,12 @@ function metaLine(item) {
   if (item.due_at && !item.done) chips.push(chip("calendar", friendlyDue(item.due_at), isOverdue(item) ? "danger" : ""));
   if (item.repeat !== "none") chips.push(chip("repeat", REPEATS[item.repeat][1]));
   if (item.assignee) chips.push(chip("person", memberName(item.assignee), item.assignee === me() ? "accent" : ""));
+  if (state.tab === "shopping") {
+    if (item.kind !== "shopping") chips.push(chip(item.kind, KINDS[item.kind].title));
+  } else {
+    if (item.category && !state.category[state.tab]) chips.push(chip("tag", item.category));
+    if (item.store) chips.push(chip("store", item.store));
+  }
   if (item.notes) chips.push(chip("note", "Note"));
   return chips.length ? h("span", { class: "meta" }, chips) : null;
 }
@@ -823,6 +912,38 @@ sheet.addEventListener("click", (e) => {
   if (e.target === sheet) closeSheet();
 });
 
+/** A text field with tappable suggestions underneath (things you've used before). */
+function suggestField(label, value, suggestions, placeholder, maxlength) {
+  const input = h("input", {
+    type: "text",
+    value: value ?? "",
+    placeholder,
+    maxlength: String(maxlength),
+    autocomplete: "off",
+    autocapitalize: "words",
+    enterkeyhint: "done",
+  });
+  const chips = h("div", { class: "suggest" });
+  const draw = () => {
+    const typed = norm(input.value);
+    const picked = suggestions.some((s) => norm(s) === typed); // already a known value: offer the others to switch
+    const matches = suggestions.filter((s) => norm(s) !== typed && (!typed || picked || norm(s).includes(typed))).slice(0, 8);
+    chips.replaceChildren(...matches.map((s) => h("button", {
+      type: "button",
+      class: "fchip small",
+      onclick: () => { input.value = s; draw(); },
+    }, s)));
+    if (input.value) {
+      chips.append(h("button", { type: "button", class: "fchip small clear", onclick: () => { input.value = ""; draw(); } }, "Clear"));
+    }
+    chips.hidden = !chips.childElementCount;
+  };
+  input.addEventListener("input", draw);
+  draw();
+  const row = h("li", { class: "row static stacked" }, h("label", { class: "field" }, h("span", {}, label), input), chips);
+  return { input, row };
+}
+
 function openEditor(original) {
   const titleEl = h("textarea", { rows: "2", maxlength: "300", value: original.title, class: "title-input" });
   const notesEl = h("textarea", { rows: "3", maxlength: "4000", value: original.notes ?? "", placeholder: "Notes (size, brand, where it is…)" });
@@ -836,6 +957,10 @@ function openEditor(original) {
   const dueEl = h("input", { type: "datetime-local", value: toLocalInput(original.due_at ?? tomorrowAt(9).toISOString()) });
   const repeatEl = h("select", { value: original.repeat },
     Object.entries(REPEATS).map(([k, [label]]) => h("option", { value: k }, label)));
+  const categoryField = suggestField("Category", original.category, distinct("category", [
+    ...state.items, ...DEFAULT_CATEGORIES.map((category) => ({ category })),
+  ]), "None", 40);
+  const storeField = suggestField("Buy at", original.store, distinct("store"), "Store (optional)", 60);
 
   const urgentRow = h("li", { class: "row static" }, h("label", { class: "toggle-row" }, h("span", {}, "Urgent"), urgentEl));
   const dueRow = h("li", { class: "row static" }, h("label", { class: "field" }, h("span", {}, "When"), dueEl));
@@ -859,6 +984,8 @@ function openEditor(original) {
       urgent: kindEl.value === "fix" && urgentEl.checked,
       due_at: hasDueEl.checked && dueEl.value ? new Date(dueEl.value).toISOString() : null,
       repeat: repeatEl.value,
+      category: clean(categoryField.input.value) || null,
+      store: clean(storeField.input.value) || null,
     };
     closeSheet();
     saveItem(updated);
@@ -879,6 +1006,7 @@ function openEditor(original) {
     h("ul", { class: "card" },
       h("li", { class: "row static" }, titleEl),
       h("li", { class: "row static" }, notesEl)),
+    h("ul", { class: "card" }, categoryField.row, storeField.row),
     h("ul", { class: "card" },
       h("li", { class: "row static" }, h("label", { class: "field" }, h("span", {}, "List"), kindEl)),
       h("li", { class: "row static" }, h("label", { class: "field" }, h("span", {}, "Who"), whoEl)),
